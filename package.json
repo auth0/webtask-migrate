@@ -1,0 +1,31 @@
+{
+  "name": "analzye",
+  "version": "1.0.0",
+  "description": "Migrate webtasks between deployments",
+  "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/auth0/webtask-migrate.git"
+  },
+  "scripts": {
+    "test": "./node_modules/mocha/bin/mocha"
+  },
+  "author": "Randall Tombaugh",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/auth0/webtask-migrate/issues"
+  },
+  "homepage": "https://github.com/auth0/webtask-migrate#readme",
+  "dependencies": {
+    "jwt-decode": "^2.2.0",
+    "lodash": "^4.17.5",
+    "object-hash": "^1.3.0",
+    "request": "^2.85.0",
+    "request-promise": "^4.2.2",
+    "webtask-analyzer": "git@github.com:auth0/webtask-analyzer.git"
+  },
+  "devDependencies": {
+    "mocha": "^5.0.5",
+    "dotenv": "^5.0.1"
+  }
+}

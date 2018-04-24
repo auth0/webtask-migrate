@@ -1,3 +1,5 @@
+'use strict';
+
 const Assert = require('assert');
 const EventEmitter = require('events');
 const _ = require('lodash');
@@ -9,124 +11,97 @@ const cachedAvailableModules = {};
 const delayPerModule = 100;
 const moduleLimit = 25;
 
-const ProvisionerState = {
-    initialized: 'initialized',
-    provisioning: 'provisioning',
-    paused: 'paused',
-    done: 'done',
-};
-
 async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function onAvailableModule(provisioner, aModule) {
+function onAvailableModule(provisioner, aModule) {
     provisioner._availableModules.push(aModule);
-    process.nextTick(() => provisioner.emit('module', aModule));
-}
-
-async function onFailedModule(provisioner, aModule) {
-    provisioner._failedModules.push(aModule);
-    process.nextTick(() => provisioner.emit('failed', aModule));
-}
-
-function emitError(provisioner, error) {
-    provisioner._errors.push(error);
-    process.nextTick(() => provisioner.emit('error', error.message));
-}
-
-function queueModules(provisioner) {
-    for (const aModule of provisioner._modules) {
-        Assert.ok(_.isString(aModule.name), 'module.name(string) required');
-        Assert.ok(
-            _.isString(aModule.version),
-            'module.version(string) required'
-        );
-
-        const queue = provisioner._queue;
-        const availableModules = provisioner._availableModules;
-        const queuedModules = provisioner._queuedModules;
-        const deployment = provisioner._deployment;
-        const tenantName = provisioner._tenantName;
-
-        const cachedName = cachedAvailableModules[aModule.name];
-        if (cachedName && cachedName[aModule.version]) {
-            queue.push(async () => onAvailableModule(provisioner, aModule));
-        } else {
-            queuedModules.push(aModule);
-        }
-
-        const doProvisioning = async () => {
-            if (!queuedModules.length) {
-                return;
-            }
-
-            const toProvision = queuedModules.splice(0, moduleLimit);
-
-            let results;
-            try {
-                results = await deployment.provisionModules(
-                    toProvision,
-                    tenantName
-                );
-            } catch (error) {
-                queue.push(async () => emitError(provisioner, error));
-            }
-
-            if (results) {
-                let stillQueued = 0;
-                for (const result of results) {
-                    const { name, version, state } = result;
-                    const aModule = { name, version };
-                    if (state === 'available') {
-                        queue.push(async () =>
-                            onAvailableModule(provisioner, aModule)
-                        );
-                    } else if (state === 'failed') {
-                        queue.push(async () =>
-                            onFailedModule(provisioner, aModule)
-                        );
-                    } else {
-                        stillQueued++;
-                        queuedModules.push(aModule);
-                    }
-                }
-
-                if (stillQueued) {
-                    await delay(stillQueued * delayPerModule);
-                }
-
-                queue.push(doProvisioning);
-            }
-        };
-
-        _.times(deployment.getClient().getMaxConcurrent(), () =>
-            queue.push(doProvisioning)
-        );
+    cachedAvailableModules[aModule.name] =
+        cachedAvailableModules[aModule.name] || {};
+    cachedAvailableModules[aModule.name][aModule.version] = 1;
+    try {
+        provisioner.emit('module', aModule);
+    } catch (error) {
+        // do nothing
     }
 }
 
-function nextAction(provisioner) {
-    process.nextTick(() => {
-        if (provisioner._state === ProvisionerState.provisioning) {
-            const action = provisioner._queue.shift();
-            if (!action) {
-                if (!provisioner._inflight) {
-                    provisioner._state = ProvisionerState.done;
-                    provisioner.emit('done');
-                }
-                return;
-            }
+function onFailedModule(provisioner, aModule) {
+    provisioner._failedModules.push(aModule);
+    try {
+        provisioner.emit('failed', aModule);
+    } catch (error) {
+        // do nothing
+    }
+}
 
-            provisioner._inflight++;
-            process.nextTick(async () => {
-                await action();
-                provisioner._inflight--;
-                nextAction(provisioner);
-            });
-            nextAction(provisioner);
+function onDone(provisioner) {
+    if (!provisioner._done) {
+        provisioner._done = true;
+        try {
+            provisioner.emit('done', provisioner);
+        } catch (error) {
+            // do nothing
         }
-    });
+    }
+}
+
+function onError(provisioner, error) {
+    provisioner._errors.push(error);
+    try {
+        provisioner.emit('error', error.message);
+    } catch (error) {
+        // do nothing
+    }
+}
+
+async function provision(provisioner) {
+    const queuedModules = provisioner._queuedModules;
+    const deployment = provisioner._deployment;
+    const tenantName = provisioner._tenantName;
+
+    if (!queuedModules.length || provisioner._done) {
+        if (!provisioner._inflight) {
+            onDone(provisioner);
+        }
+        return;
+    }
+
+    const toProvision = queuedModules.splice(0, moduleLimit);
+
+    let results;
+    provisioner._inflight++;
+    try {
+        results = await deployment.provisionModules(toProvision, tenantName);
+    } catch (error) {
+        onError(provisioner, error);
+        onDone(provisioner);
+        return;
+    }
+    provisioner._inflight--;
+
+    if (results) {
+        let stillQueued = 0;
+        for (const result of results) {
+            const { name, version, state } = result;
+            const aModule = { name, version };
+            if (state === 'available') {
+                onAvailableModule(provisioner, aModule);
+            } else if (state === 'failed') {
+                onFailedModule(provisioner, aModule);
+            } else {
+                stillQueued++;
+                queuedModules.push(aModule);
+            }
+        }
+
+        if (stillQueued) {
+            await delay(stillQueued * delayPerModule);
+        }
+
+        await provision(provisioner);
+    }
 }
 
 class ModuleProvisioner extends EventEmitter {
@@ -159,8 +134,8 @@ class ModuleProvisioner extends EventEmitter {
         this._availableModules = [];
         this._failedModules = [];
         this._errors = [];
-        this._queue = [];
-        this._state = ProvisionerState.initialized;
+        this._started = false;
+        this._done = false;
         this._inflight = 0;
     }
 
@@ -177,21 +152,17 @@ class ModuleProvisioner extends EventEmitter {
     }
 
     provision() {
-        if (this._state === ProvisionerState.initialized) {
-            this._state = ProvisionerState.provisioning;
-            queueModules(this);
-            nextAction(this);
-        }
-
-        if (this._state === ProvisionerState.paused) {
-            this._state = ProvisionerState.provisioning;
-            nextAction(this);
-        }
-    }
-
-    pause() {
-        if (this._state === ProvisionerState.provisioning) {
-            this._state = ProvisionerState.paused;
+        if (!this._started) {
+            this._started = true;
+            for (const aModule of this._modules) {
+                const cachedName = cachedAvailableModules[aModule.name];
+                if (cachedName && cachedName[aModule.version]) {
+                    onAvailableModule(this, aModule);
+                } else {
+                    this._queuedModules.push(aModule);
+                }
+            }
+            _.times(10, () => provision(this));
         }
     }
 }

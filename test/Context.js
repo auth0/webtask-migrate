@@ -7,8 +7,12 @@ function getContext() {
         'Environment variable TEST_MASTER_TOKEN must be defined.'
     );
     Assert.ok(
-        process.env.TEST_DEPLOYMENT_URL,
-        'Environment variable TEST_DEPLOYMENT_URL must be defined.'
+        process.env.TEST_TO_DEPLOYMENT_URL,
+        'Environment variable TEST_TO_DEPLOYMENT_URL must be defined.'
+    );
+    Assert.ok(
+        process.env.TEST_FROM_DEPLOYMENT_URL,
+        'Environment variable TEST_FROM_DEPLOYMENT_URL must be defined.'
     );
     Assert.ok(
         process.env.TEST_TENANT_TOKEN_1,
@@ -29,7 +33,9 @@ function getContext() {
 
     return {
         masterTokenString: process.env.TEST_MASTER_TOKEN,
-        deploymentUrl: process.env.TEST_DEPLOYMENT_URL,
+        deploymentUrl: process.env.TEST_FROM_DEPLOYMENT_URL,
+        fromDeploymentUrl: process.env.TEST_FROM_DEPLOYMENT_URL,
+        toDeploymentUrl: process.env.TEST_TO_DEPLOYMENT_URL,
         tenant1: {
             name: process.env.TEST_TENANT_1,
             tokenString: process.env.TEST_TENANT_TOKEN_1

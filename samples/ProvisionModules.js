@@ -5,12 +5,12 @@ const fs = require('fs');
 const { TokenStore, Token, Deployment, ModuleProvisioner } = require('../src');
 
 // Enviroment variables
-const deploymentName = process.env.DEPLOYMENT;
-const deploymentUrl = process.env.DEPLOYMENT_URL;
-const masterTokenString = process.env.MASTER_TOKEN;
+const deploymentUrl = process.env.TO_DEPLOYMENT_URL;
+const tokenString = process.env.TOKEN;
+const tenantName = process.env.TENANT || null;
 
 // Ensure output dir
-const outputDir = `./output/${deploymentName}`;
+const outputDir = `./output/${process.env.OUTPUT}`;
 if (!fs.existsSync(outputDir)) {
     if (!fs.existsSync('./output')) {
         fs.mkdirSync('./output');
@@ -21,10 +21,9 @@ if (!fs.existsSync(outputDir)) {
 // Setup
 const startTime = Date.now();
 const tokenStore = new TokenStore();
-tokenStore.addToken(new Token(masterTokenString));
+tokenStore.addToken(new Token(tokenString, tenantName));
 
-const deploymentOptions = { maxConcurrency: 50 };
-const deployment = new Deployment(tokenStore, deploymentUrl, deploymentOptions);
+const deployment = new Deployment(tokenStore, deploymentUrl);
 
 const inputFilePath = `${outputDir}/modules.csv`;
 if (!fs.existsSync(inputFilePath)) {
@@ -41,7 +40,7 @@ for (const line of _.split(inputFile, '\n')) {
     }
 }
 
-const provisioner = new ModuleProvisioner(deployment, modules);
+const provisioner = new ModuleProvisioner(deployment, modules, tenantName);
 
 // Handle error events
 let errorCount = 0;

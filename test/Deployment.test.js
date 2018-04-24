@@ -109,6 +109,244 @@ describe('Deployment', function() {
 
             await deployment.deleteWebtask(tenantName, webtaskName);
         });
+        it('should return null for non-existing webtask', async function() {
+            const tenantName = Context.tenant1.name;
+            const webtaskName = 'webtaskA';
+            const tokenStore = new TokenStore();
+            await tokenStore.addToken(new Token(Context.tenant1.tokenString));
+
+            const deploymentUrl = Context.deploymentUrl;
+            const deployment = new Deployment(tokenStore, deploymentUrl);
+
+            const webtask = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName
+            );
+
+            Assert.strictEqual(webtask, null);
+        });
+        it('should download a webtask with storage', async function() {
+            const tenantName = Context.tenant1.name;
+            const webtaskName = 'webtaskA';
+            const code = 'module.exports = (cb) => cb(null, "Hello World")';
+            const storage = { data: { a: 1, b: 2 } };
+            const webtask = new Webtask(code, { storage });
+
+            const tokenStore = new TokenStore();
+            await tokenStore.addToken(new Token(Context.tenant1.tokenString));
+
+            const deploymentUrl = Context.deploymentUrl;
+            const deployment = new Deployment(tokenStore, deploymentUrl);
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+
+            await deployment.uploadWebtask(tenantName, webtaskName, webtask, {
+                overwriteStorage: true,
+            });
+
+            const actual = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName,
+                { includeStorage: true }
+            );
+            Assert.strictEqual(actual.getCode(), code);
+            Assert.strictEqual(actual.getStorageData(), '{"a":1,"b":2}');
+            Assert.strictEqual(actual.getStorageEtag(), 1);
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+        });
+        it('should download a webtask with cron', async function() {
+            const tenantName = Context.tenant1.name;
+            const webtaskName = 'webtaskA';
+            const code = 'module.exports = (cb) => cb(null, "Hello World")';
+            const cron = {
+                schedule: '40 3 * * *',
+                tz: 'US/Pacific',
+                state: 'inactive',
+            };
+            const webtask = new Webtask(code, { cron });
+
+            const tokenStore = new TokenStore();
+            await tokenStore.addToken(new Token(Context.tenant1.tokenString));
+
+            const deploymentUrl = Context.deploymentUrl;
+            const deployment = new Deployment(tokenStore, deploymentUrl);
+
+            await deployment.uploadWebtask(tenantName, webtaskName, webtask);
+
+            const actual = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName,
+                { includeCron: true }
+            );
+            Assert.strictEqual(actual.getCode(), code);
+            Assert.strictEqual(actual.getCron().schedule, '40 3 * * *');
+            Assert.strictEqual(actual.getCron().tz, 'US/Pacific');
+            Assert.strictEqual(actual.getCron().state, 'inactive');
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+        });
+    });
+    describe('uploadWebtask()', function() {
+        it('should update a webtask with storage', async function() {
+            const tenantName = Context.tenant1.name;
+            const webtaskName = 'webtaskA';
+            const code = 'module.exports = (cb) => cb(null, "Hello World")';
+            const storage = { data: { a: 1, b: 2 } };
+            const webtask = new Webtask(code, { storage });
+
+            const tokenStore = new TokenStore();
+            await tokenStore.addToken(new Token(Context.tenant1.tokenString));
+
+            const deploymentUrl = Context.deploymentUrl;
+            const deployment = new Deployment(tokenStore, deploymentUrl);
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+
+            await deployment.uploadWebtask(tenantName, webtaskName, webtask, {
+                overwriteStorage: true,
+            });
+
+            const downloaded = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName,
+                { includeStorage: true }
+            );
+            downloaded.setStorageData({ a: 1, b: 1, c: 3 });
+            await deployment.uploadWebtask(tenantName, webtaskName, downloaded);
+
+            const actual = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName,
+                { includeStorage: true }
+            );
+            Assert.strictEqual(actual.getCode(), code);
+            Assert.strictEqual(actual.getStorageData(), '{"a":1,"b":1,"c":3}');
+            Assert.strictEqual(actual.getStorageEtag(), 2);
+            await deployment.deleteWebtask(tenantName, webtaskName);
+        });
+        it('should ignore storage etag with overwrite option', async function() {
+            const tenantName = Context.tenant1.name;
+            const webtaskName = 'webtaskD';
+            const code = 'module.exports = (cb) => cb(null, "Hello World")';
+            const storage = { etag: 4, data: { a: 1, b: 2 } };
+            const webtask = new Webtask(code, { storage });
+
+            const tokenStore = new TokenStore();
+            await tokenStore.addToken(new Token(Context.tenant1.tokenString));
+
+            const deploymentUrl = Context.deploymentUrl;
+            const deployment = new Deployment(tokenStore, deploymentUrl);
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+
+            await deployment.uploadWebtask(tenantName, webtaskName, webtask, {
+                overwriteStorage: true,
+            });
+
+            const actual = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName,
+                { includeStorage: true }
+            );
+            Assert.strictEqual(actual.getStorageData(), '{"a":1,"b":2}');
+            Assert.strictEqual(actual.getStorageEtag(), 1);
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+        });
+        it('should error with storage conflicts', async function() {
+            const tenantName = Context.tenant1.name;
+            const webtaskName = 'webtaskA';
+            const code = 'module.exports = (cb) => cb(null, "Hello World")';
+            const storage = { data: { a: 1, b: 2 } };
+            const webtask = new Webtask(code, { storage });
+
+            const tokenStore = new TokenStore();
+            await tokenStore.addToken(new Token(Context.tenant1.tokenString));
+
+            const deploymentUrl = Context.deploymentUrl;
+            const deployment = new Deployment(tokenStore, deploymentUrl);
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+
+            await deployment.uploadWebtask(tenantName, webtaskName, webtask, { overwriteStorage: true });
+
+            const downloaded1 = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName,
+                { includeStorage: true }
+            );
+            const downloaded2 = await deployment.downloadWebtask(
+                tenantName,
+                webtaskName,
+                { includeStorage: true }
+            );
+
+            downloaded1.setStorageData({ a: 1, b: 1, c: 3 });
+            await deployment.uploadWebtask(
+                tenantName,
+                webtaskName,
+                downloaded1
+            );
+
+            downloaded2.setStorageData({ a: 1, b: 0, c: 4 });
+            let message;
+            try {
+                const result = await deployment.uploadWebtask(
+                    tenantName,
+                    webtaskName,
+                    downloaded2
+                );
+            } catch (error) {
+                message = error.message;
+            }
+
+            Assert.strictEqual(
+                message,
+                'Failed to upload the storage data to the webtask due to the following error: Conditional PUT failed with etag mismatch'
+            );
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+        });
+        it('should ensure storage conflicts with new storage', async function() {
+            const tenantName = Context.tenant1.name;
+            const webtaskName = 'webtaskA';
+            const code = 'module.exports = (cb) => cb(null, "Hello World")';
+
+            const storage1 = { data: { a: 1, b: 2 } };
+            const webtask1 = new Webtask(code, { storage: storage1 });
+
+            const storage2 = { data: { c: 3, b: 1 } };
+            const webtask2 = new Webtask(code, { storage: storage2 });
+
+            const tokenStore = new TokenStore();
+            await tokenStore.addToken(new Token(Context.tenant1.tokenString));
+
+            const deploymentUrl = Context.toDeploymentUrl;
+            const deployment = new Deployment(tokenStore, deploymentUrl);
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+
+            await deployment.uploadWebtask(tenantName, webtaskName, webtask1);
+
+            let message;
+            try {
+                const result = await deployment.uploadWebtask(
+                    tenantName,
+                    webtaskName,
+                    webtask2
+                );
+            } catch (error) {
+                message = error.message;
+            }
+
+            Assert.strictEqual(
+                message,
+                'Failed to upload the storage data to the webtask due to the following error: Conditional PUT failed with etag mismatch'
+            );
+
+            await deployment.deleteWebtask(tenantName, webtaskName);
+        });
     });
     describe('listWebtask()', function() {
         it('should return all webtasks if no tenant is given', async function() {
@@ -162,7 +400,7 @@ describe('Deployment', function() {
             const deployment = new Deployment(tokenStore, deploymentUrl);
             let message;
             try {
-                await deployment.provisionModules([ { version: '4.17.5' }]);
+                await deployment.provisionModules([{ version: '4.17.5' }]);
             } catch (error) {
                 message = error.message;
             }
@@ -206,7 +444,9 @@ describe('Deployment', function() {
             const deployment = new Deployment(tokenStore, deploymentUrl);
 
             const modules = require('./data/modules.json');
-            const result = await deployment.provisionModules(_.take(modules, 50));
+            const result = await deployment.provisionModules(
+                _.take(modules, 50)
+            );
             Assert.ok(result.length, 50);
         });
     });

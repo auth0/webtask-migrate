@@ -69,7 +69,7 @@ describe('Client', function() {
 
             Assert.equal(
                 message,
-                'rejecting request without Authorization header or key URL query parameter'
+                "Request failed with status '403' and message 'rejecting request without Authorization header or key URL query parameter'."
             );
         });
     });

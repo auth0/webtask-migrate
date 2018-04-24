@@ -1,8 +1,10 @@
+'use strict';
+
 const Assert = require('assert');
 const Decode = require('jwt-decode');
 const _ = require('lodash');
 
-const webtaskClaims = [ 'jti', 'iat', 'ca', 'dd', 'ten', 'jtn', 'url', 'etcx', 'host' ];
+const webtaskClaims = [ 'jti', 'iat', 'ca', 'dd', 'dr', 'ten', 'jtn', 'url', 'ectx', 'host' ];
 
 class Token {
     constructor(tokenString, tenantName) {
@@ -18,15 +20,15 @@ class Token {
     }
 
     isMasterToken() {
-        return this._claims.dd === 3;
+        return !this._claims.ten;
     }
 
     isTenantToken() {
-        return this._claims.dd === 2;
+        return this._claims.ten && this._claims.ten.length > 0;
     }
 
     isWebtaskToken() {
-        return this._claims.dd === 1;
+        return this.isTenantToken() && this._claims.dd === 0;
     }
 
     getAllClaims() {
@@ -38,11 +40,8 @@ class Token {
         if (this._claims.pb === 2) {
             claimsToOmit.push('pb');
         }
-        if (this._claims.dr === 1) {
-            claimsToOmit.push('dr');
-        }
-        if (this._claims.dd === 0) {
-            claimsToOmit.push('dd');
+        if (this._claims.mb === 0) {
+            claimsToOmit.push('mb');
         }
         return _.omit(this._claims, claimsToOmit);
     }

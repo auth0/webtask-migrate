@@ -2,21 +2,15 @@ require('dotenv').config();
 const _ = require('lodash');
 const fs = require('fs');
 
-const {
-    TokenStore,
-    Token,
-    Client,
-    Deployment,
-    WebtaskDownloader,
-} = require('../src');
+const { TokenStore, Token, Deployment, WebtaskAnalyzer } = require('../src');
 
 // Enviroment variables
-const deploymentName = process.env.DEPLOYMENT;
-const deploymentUrl = process.env.DEPLOYMENT_URL;
-const masterTokenString = process.env.MASTER_TOKEN;
+const deploymentUrl = process.env.FROM_DEPLOYMENT_URL;
+const tokenString = process.env.TOKEN;
+const tenantName = process.env.TENANT || null;
 
 // Ensure output dir
-const outputDir = `./output/${deploymentName}`;
+const outputDir = `./output/${process.env.OUTPUT}`;
 if (!fs.existsSync(outputDir)) {
     if (!fs.existsSync('./output')) {
         fs.mkdirSync('./output');
@@ -24,117 +18,167 @@ if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir);
 }
 
+// Options
+const warnOnClaims = true;
+const includeCron = true;
+const includeStorage = true;
+const includeSecrets = false;
+
 // Setup
 const startTime = Date.now();
 const tokenStore = new TokenStore();
-tokenStore.addToken(new Token(masterTokenString));
+tokenStore.addToken(new Token(tokenString, tenantName));
 
-const deploymentOptions = { maxConcurrency: 50 };
-const deployment = new Deployment(tokenStore, deploymentUrl, deploymentOptions);
+const deployment = new Deployment(tokenStore, deploymentUrl);
+const analyzer = new WebtaskAnalyzer(deployment, { warnOnClaims });
 
-const downloaderOptions = {
-    includeStorage: false,
-    includeCron: false,
-    includeSecrets: false,
-    runAnalysis: true,
-    filter: ({tenantName, webtaskName}) => {
-        return !_.startsWith(tenantName, 'auth0-')
-    }
-};
-const downloader = new WebtaskDownloader(deployment, downloaderOptions);
+// File Streams
+const streams = {};
 
-// Handle error events
-let errorCount = 0;
-const errorFile = `${outputDir}/analyzeWebtasks.errors.csv`;
-const errorStream = fs.createWriteStream(errorFile, { flags: 'a' });
-downloader.on('error', error => {
-    errorStream.write(`${error.message}\n`);
-    errorCount++;
-});
+function createStream(name, fileName) {
+    const path = `${outputDir}/${fileName}`;
+    streams[name] = fs.createWriteStream(path, { flags: 'a' });
+}
 
-// Handle webtask events
+createStream('error', 'analyzeWebtasks.errors.csv');
+createStream('compilers', 'compilers.csv');
+createStream('webtaskCompilers', 'tenants.webtasks.compilers.csv');
+createStream('claims', 'claims.csv');
+createStream('webtaskClaims', 'tenants.webtasks.claims.csv');
+createStream('webtaskStorage', 'storage.csv');
+createStream('webtaskCron', 'cron.csv');
+createStream('modules', 'modules.csv');
+createStream('webtaskModules', 'tenants.webtasks.modules.csv');
+createStream('warnings', 'warnings.csv');
+createStream('webtaskWarnings', 'tenants.webtasks.warnings.csv');
+
+// Counters and gobal data
 let webtaskCount = 0;
+let errorCount = 0;
 
 const compilers = {};
-const compilersFile = `${outputDir}/compilers.csv`;
-const compilersStream = fs.createWriteStream(compilersFile, { flags: 'a' });
-const webtaksCompilersFile = `${outputDir}/tenants.webtasks.compilers.csv`;
-const webtasksCompilersStream = fs.createWriteStream(webtaksCompilersFile, { flags: 'a' });
-
+const claims = {};
 const modules = {};
-const modulesFile = `${outputDir}/modules.csv`;
-const modulesStream = fs.createWriteStream(modulesFile, { flags: 'a' });
-const webtasksModulesFile = `${outputDir}/tenants.webtasks.modules.csv`;
-const webtasksModulesStream = fs.createWriteStream(webtasksModulesFile, { flags: 'a' });
+const warnings = {};
 
-const warnings = {}
-const warningsFile = `${outputDir}/warnings.csv`;
-const warningsStream = fs.createWriteStream(warningsFile, { flags: 'a' });
-const webtasksWarningsFile = `${outputDir}/tenants.webtasks.warnings.csv`;
-const webtasksWarningsStream = fs.createWriteStream(webtasksWarningsFile, { flags: 'a' });
+let offset = 0;
+const limit = 100;
 
-downloader.on('webtask', webtaskInfo => {
+async function onWebtask(tenantName, webtaskName) {
 
-    // Compiler analysis
-    const { tenantName, webtaskName, webtask, analysis } = webtaskInfo;
+    const webtask = await deployment.downloadWebtask(
+        tenantName,
+        webtaskName,
+        { includeCron, includeStorage, includeSecrets }
+    );
+
+    // Compiler
     const compiler = webtask.getCompiler();
     if (compiler) {
-        webtasksCompilersStream.write(`${tenantName},${webtaskName},${compiler}\n`);
+        const entry = [tenantName, webtaskName, compiler];
+        streams.webtaskCompilers.write(`${entry.join()}\n`);
         if (!compilers[compiler]) {
-            compilersStream.write(`${compiler}\n`);
+            streams.compilers.write(`${compiler}\n`);
             compilers[compiler] = 1;
         }
     }
 
+    // Claims
+    const webtaskClaims = webtask.getClaims();
+    for (const claimName of _.keys(webtaskClaims)) {
+        const claimValue = webtaskClaims[claimName];
+        const entry = [tenantName, webtaskName, claimName, claimValue];
+        streams.webtaskClaims.write(`${entry.join()}\n`);
+
+        const claimString = `${claimName}=${claimValue}`;
+        if (!claims[claimString]) {
+            streams.claims.write(`${claimString}\n`);
+            claims[claimString] = 1;
+        }
+    }
+
+    // Storage
+    const storage = webtask.getStorageData();
+    if (storage) {
+        streams.webtaskStorage.write(`${tenantName},${webtaskName}\n`);
+    }
+
+    // Cron
+    const cron = webtask.getStorageData();
+    if (cron) {
+        const entry = [tenantName, webtaskName, cron.state];
+        streams.webtaskCron.write(`${entry.join()}\n`);
+    }
+
+    const analysis = await analyzer.analyze(tenantName, webtaskName, webtask);
+
     // Dependency analysis
     webtask.addDependencies(analysis.dependencies);
     const dependencies = webtask.getDependencies();
-    for(const dependency of dependencies) {
+    for (const dependency of dependencies) {
         const { name, version } = dependency;
-        webtasksModulesStream.write(`${tenantName},${webtaskName},${name},${version}\n`);
+        const entry = [tenantName, webtaskName, name, version];
+        streams.webtaskModules.write(`${entry.join()}\n`);
         const moduleString = `${name}@${version}`;
         if (!modules[moduleString]) {
-            modulesStream.write(`${name},${version}\n`);
+            streams.modules.write(`${name},${version}\n`);
             modules[moduleString] = 1;
         }
     }
 
     // Warnings analysis
-    for(const warning of analysis.warnings) {
+    for (const warning of analysis.warnings) {
         const { warningType, value } = warning;
-        webtasksWarningsStream.write(`${tenantName},${webtaskName},${warningType},${value}\n`);
+        const entry = [tenantName, webtaskName, warningType, value];
+        streams.webtaskWarnings.write(`${entry.join()}\n`);
         const warningString = `${warningType}::${value}`;
         if (!warnings[warningString]) {
-            warningsStream.write(`${warningType},${value}\n`);
+            streams.warnings.write(`${warningType},${value}\n`);
             warnings[warningString] = 1;
         }
     }
 
     webtaskCount++;
-    if (webtaskCount % 100 === 0) {
+    if (webtaskCount % 10 === 0) {
         console.log('Processed: ', webtaskCount);
     }
-});
+}
 
-// Handle done event
-downloader.on('done', () => {
-    console.log('--- Completed ---');
-    console.log(`Processed: ${webtaskCount}`);
-    console.log(`Errors: ${errorCount}`);
+async function execute() {
+    const options = { offset, limit };
+    offset += limit;
+    webtasks = await deployment.listWebtasks(tenantName, options);
+    if (webtasks.length) {
+        offset += webtasks.length;
+        for (const { tenantName, webtaskName } of webtasks) {
+            try {
+                await onWebtask(tenantName, webtaskName);
+            } catch (error) {
+                const entry = [tenantName, webtaskName, error.message];
+                streams.error.write(`${entry.join()}\n`);
+                errorCount++;
+            }
+        }
+        await execute();
+    }
+}
 
-    const duration = Date.now() - startTime;
-    const durationInMinutes = duration/(60 * 1000);
-    console.log(`Duration: ${durationInMinutes.toFixed(2)} min`);
+Promise.all(_.times(10, execute))
+    .then(() => {
+        console.log('--- Completed ---');
+        console.log(`Processed: ${webtaskCount}`);
+        console.log(`Errors: ${errorCount}`);
 
-    errorStream.close();
-    compilersStream.close();
-    webtasksCompilersStream.close();
-    modulesStream.close();
-    webtasksModulesStream.close();
-    warningsStream.close();
-    webtasksWarningsStream.close();
-    process.exit(0);
-});
+        const duration = Date.now() - startTime;
+        const durationInMinutes = duration / (60 * 1000);
+        console.log(`Duration: ${durationInMinutes.toFixed(2)} min`);
 
-// Start downloading
-downloader.download();
+        for (const stream of _.values(streams)) {
+            stream.close();
+        }
+    })
+    .catch(error => {
+        console.log('--- Error ---');
+        console.log(error);
+        process.exit(1);
+    });

@@ -1,3 +1,5 @@
+'use strict';
+
 const Assert = require('assert');
 const hash = require('object-hash');
 const _ = require('lodash');
@@ -16,11 +18,16 @@ class Webtask {
             );
         }
 
+        const storage = _.cloneDeep(options.storage || {});
+        if (storage.data && !_.isString(storage.data)) {
+            storage.data = JSON.stringify(storage.data);
+        }
+
         this._state = {
             code,
             meta: options.meta || {},
             secrets: options.secrets || {},
-            storage: options.storage || {},
+            storage,
             cron: options.cron || {},
             token: options.token || null,
         };
@@ -84,8 +91,18 @@ class Webtask {
         return _.cloneDeep(this._state.secrets);
     }
 
-    getStorage() {
-        return _.cloneDeep(this._state.storage);
+    getStorageData() {
+        return this._state.storage.data || null;
+    }
+
+    getStorageEtag() {
+        return this._state.storage.etag || null;
+    }
+
+    setStorageData(data) {
+        this._state.storage.data = _.isString(data)
+            ? data
+            : JSON.stringify(data);
     }
 
     getCron() {

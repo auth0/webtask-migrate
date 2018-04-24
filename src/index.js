@@ -3,8 +3,8 @@ const Deployment = require('./Deployment');
 const Webtask = require('./Webtask');
 const Token = require('./Token');
 const TokenStore = require('./TokenStore');
+const WebtaskMigrator = require('./WebtaskMigrator');
 const WebtaskAnalyzer = require('./WebtaskAnalyzer');
-const WebtaskDownloader = require('./WebtaskDownloader');
 const ModuleProvisioner = require('./ModuleProvisioner');
 
 module.exports = {
@@ -13,7 +13,7 @@ module.exports = {
     Webtask,
     Token,
     TokenStore,
-    WebtaskDownloader,
+    WebtaskMigrator,
     WebtaskAnalyzer,
     ModuleProvisioner,
 }

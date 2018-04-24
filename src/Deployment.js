@@ -1,3 +1,5 @@
+'use strict';
+
 const Assert = require('assert');
 const _ = require('lodash');
 
@@ -8,6 +10,233 @@ const TokenStore = require('./TokenStore');
 
 const maxListLimit = 100;
 const maxModules = 50;
+
+function getNames(tenantName, webtaskName) {
+    return {
+        tenantName,
+        webtaskName,
+        safeTenant: encodeURIComponent(tenantName),
+        safeWebtask: encodeURIComponent(webtaskName),
+    };
+}
+
+async function uploadWebtask(deployment, names, token, webtask, ignoreClaims) {
+    let method;
+    let path;
+    let body;
+
+    const claims = webtask.getClaims();
+    if (ignoreClaims || !_.keys(claims).length) {
+        const { safeTenant, safeWebtask } = names;
+        path = `api/webtask/${safeTenant}/${safeWebtask}`;
+        body = {};
+        method = 'PUT';
+
+        const secrets = webtask.getSecrets();
+        if (secrets) {
+            body.secrets = secrets;
+        }
+    } else {
+        method = 'POST';
+        path = 'api/tokens/issue';
+        body = claims;
+        body.jtn = names.webtaskName;
+        body.ten = names.tenantName;
+        const secrets = webtask.getSecrets();
+        if (secrets) {
+            body.ectx = secrets;
+        }
+    }
+
+    const url = webtask.getCodeUrl();
+    if (url) {
+        body.url = url;
+    } else {
+        body.code = webtask.getCode();
+    }
+
+    const meta = webtask.getMeta();
+    if (meta) {
+        body.meta = meta;
+    }
+    const host = webtask.getHost();
+    if (host) {
+        body.host = host;
+    }
+
+    try {
+        await deployment._client.request(method, path, token, body);
+    } catch (error) {
+        const message = [
+            'Failed to upload the webtask',
+            `due to the following error: ${error.message}`,
+        ].join(' ');
+        throw new Error(message);
+    }
+}
+
+async function uploadStorage(deployment, names, token, webtask, overwrite) {
+    const data = webtask.getStorageData();
+    if (data) {
+        const { safeTenant, safeWebtask } = names;
+        const path = `api/webtask/${safeTenant}/${safeWebtask}/data`;
+        const body = { data };
+        const etag = webtask.getStorageEtag();
+        if (!overwrite) {
+            body.etag = etag || null;
+        }
+
+        try {
+            await deployment._client.request('PUT', path, token, body);
+        } catch (error) {
+            const message = [
+                'Failed to upload the storage data to the webtask',
+                `due to the following error: ${error.message}`,
+            ].join(' ');
+            throw new Error(message);
+        }
+    }
+}
+
+async function uploadCron(deployment, names, token, webtask) {
+    const cron = webtask.getCron();
+    if (cron && _.keys(cron).length) {
+        const { safeTenant, safeWebtask } = names;
+        const path = `api/cron/${safeTenant}/${safeWebtask}`;
+        try {
+            await deployment._client.request('PUT', path, token, cron);
+        } catch (error) {
+            const message = [
+                'Failed to create the CRON job',
+                `due to the following error: ${error.message}`,
+            ].join(' ');
+            throw new Error(message);
+        }
+    }
+}
+
+async function startDownloads(deployment, names, options) {
+    const tokenStore = deployment._tokenStore;
+    const client = deployment._client;
+
+    const token = await tokenStore.getToken(names.tenantName);
+
+    const promises = {};
+
+    const includeSecrets = options.includeSecrets == true;
+    const path = `${names.safeTenant}/${names.safeWebtask}`;
+    const webtaskPath = `api/webtask/${path}`;
+    const query = `?decrypt=${includeSecrets}&fetch_code=true`;
+
+    promises.webtask = client.request('GET', `${webtaskPath}${query}`, token);
+    if (options.includeStorage) {
+        promises.storage = client.request('GET', `${webtaskPath}/data`, token);
+    }
+    if (options.includeCron) {
+        promises.cron = client.request('GET', `api/cron/${path}`, token);
+    }
+
+    return promises;
+}
+
+async function downloadWebtask(webtaskPromise) {
+    try {
+        return await webtaskPromise;
+    } catch (error) {
+        const message = [
+            'Failed to download the webtask',
+            `due to the following error: ${error.message}`,
+        ].join(' ');
+        throw new Error(message);
+    }
+}
+
+async function downloadStorage(storagePromise, options) {
+    let storage;
+    try {
+        storage = await storagePromise;
+    } catch (error) {
+        const message = [
+            'Failed to download the webtask storage data',
+            `due to the following error: ${error.message}`,
+        ].join(' ');
+        throw new Error(message);
+    }
+    if (storage) {
+        options.storage = storage;
+    }
+}
+
+async function downloadCron(cronPromise, options) {
+    let cron;
+    try {
+        cron = await cronPromise;
+    } catch (error) {
+        const message = [
+            'Failed to download the webtask storage data',
+            `due to the following error: ${error.message}`,
+        ].join(' ');
+        throw new Error(message);
+    }
+    if (cron) {
+        options.cron = {
+            state: cron.state,
+            schedule: cron.schedule,
+            tz: cron.tz,
+            meta: cron.meta,
+        };
+    }
+}
+
+async function listWebtasks(deployment, tenantName, offset, limit) {
+    const token = await deployment._tokenStore.getToken(tenantName);
+
+    const path = tenantName
+        ? `api/webtask/${encodeURIComponent(tenantName)}`
+        : 'api/webtask';
+    const query = `?offset=${offset}&limit=${limit}`;
+
+    try {
+        return await deployment._client.request('GET', path + query, token);
+    } catch (error) {
+        const message = [
+            'Failed to download the list of webtasks',
+            `due to the following error: ${error.message}`,
+        ].join(' ');
+        throw new Error(message);
+    }
+}
+
+async function deleteWebtask(deployment, names, token) {
+    try {
+        await deployment._client.request(
+            'DELETE',
+            `api/webtask/${names.safeTenant}/${names.webtaskName}`,
+            token
+        );
+    } catch (error) {
+        const message = [
+            'Failed to delete the webtask',
+            `due to the following error: ${error.message}`,
+        ].join(' ');
+        throw new Error(message);
+    }
+}
+
+async function provisionModules(deployment, modules, token) {
+    const path = 'api/env/node/modules';
+    const body = { modules };
+
+    try {
+        return await deployment._client.request('POST', path, token, body);
+    } catch (error) {
+        const message = [
+            'Failed to provision the modules',
+            `due to the following error: ${error.message}`,
+        ].join(' ');
+        throw new Error(message);
+    }
+}
 
 class Deployment {
     constructor(tokenStore, client, options) {
@@ -73,65 +302,14 @@ class Deployment {
         Assert.ok(_.isObject(options), 'options(object) invalid type');
 
         const ignoreClaims = options.ignoreClaims || false;
+        const overwriteStorage = options.overwriteStorage || false;
 
-        const tenantToken = await this._tokenStore.getTenantToken(tenantName);
+        const names = getNames(tenantName, webtaskName);
+        const token = await this._tokenStore.getToken(tenantName);
 
-        let method;
-        let path;
-        let body;
-
-        const claims = webtask.getClaims();
-        if (ignoreClaims || !_.keys(claims).length) {
-            method = 'PUT';
-            path = `api/webtask/${tenantName}/${webtaskName}`;
-            body = {};
-            const secrets = webtask.getSecrets();
-            if (secrets) {
-                body.secrets = secrets;
-            }
-        } else {
-            method = 'POST';
-            path = 'api/tokens/issue';
-            body = claims;
-            body.jtn = webtaskName;
-            body.ten = tenantName;
-            const secrets = webtask.getSecrets();
-            if (secrets) {
-                body.ectx = secrets;
-            }
-        }
-
-        const url = webtask.getCodeUrl();
-        if (url) {
-            body.url = url;
-        } else {
-            body.code = webtask.getCode();
-        }
-
-        const meta = webtask.getMeta();
-        if (meta) {
-            body.meta = meta;
-        }
-        const host = webtask.getHost();
-        if (host) {
-            body.host = host;
-        }
-
-        await this._client.request(method, path, tenantToken, body);
-
-        const storage = webtask.getStorage();
-        if (storage) {
-            path = `api/webtask/${tenantName}/${webtaskName}/data`;
-            await this._client.request('PUT', path, tenantToken, storage);
-        }
-
-        const cron = webtask.getCron();
-        if (cron) {
-            path = `api/cron/${tenantName}/${webtaskName}`;
-            await this._client.request('PUT', path, tenantToken, cron);
-        }
-
-        return;
+        await uploadWebtask(this, names, token, webtask, ignoreClaims);
+        await uploadStorage(this, names, token, webtask, overwriteStorage);
+        await uploadCron(this, names, token, webtask);
     }
 
     async downloadWebtask(tenantName, webtaskName, options) {
@@ -141,35 +319,16 @@ class Deployment {
         options = options || {};
         Assert.ok(_.isObject(options), 'options(object) invalid type');
 
-        const includeCron = options.includeCron || false;
-        const includeStorage = options.includeStorage || false;
-        const includeSecrets = options.includeSecrets || false;
+        const names = getNames(tenantName, webtaskName);
+        const promises = await startDownloads(this, names, options);
 
-        const tokenStore = this._tokenStore;
-        const client = this._client;
-
-        const token =
-            (await tokenStore.getTenantToken(tenantName)) ||
-            (await tokenStore.getMasterToken());
-
-        const promises = [];
-        const path = `${tenantName}/${webtaskName}`;
-        const webtaskPath = `api/webtask/${path}`;
-        const query = `?decrypt=${includeSecrets}&fetch_code=true`;
-
-        promises.push(client.request('GET', `${webtaskPath}${query}`, token));
-        if (includeStorage) {
-            promises.push(client.request('GET', `${webtaskPath}/data`, token));
-        }
-        if (includeCron) {
-            promises.push(client.request('GET', `api/cron/${path}`, token));
+        const webtask = await downloadWebtask(promises.webtask);
+        if (!webtask) {
+            return null;
         }
 
-        const results = await Promise.all(promises);
-        const webtask = results.shift();
         const code = webtask.code;
-
-        options = {
+        const webtaskOptions = {
             secrets: webtask.secrets || {},
             meta: webtask.meta || {},
             token: new Token(webtask.token),
@@ -177,24 +336,15 @@ class Deployment {
             cron: {},
         };
 
-        if (includeStorage) {
-            const storage = results.shift();
-            options.storage = storage;
+        if (promises.storage) {
+            await downloadStorage(promises.storage, webtaskOptions);
         }
 
-        if (includeCron) {
-            const cron = results.shift();
-            if (cron) {
-                options.cron = {
-                    state: cron.state,
-                    schedule: cron.schedule,
-                    tz: cron.tz,
-                    meta: cron.meta,
-                };
-            }
+        if (promises.cron) {
+            await downloadCron(promises.cron, webtaskOptions);
         }
 
-        return new Webtask(code, options);
+        return new Webtask(code, webtaskOptions);
     }
 
     async listWebtasks(tenantName, options) {
@@ -212,37 +362,24 @@ class Deployment {
             `options.limit(number) max value is ${maxListLimit}`
         );
 
-        const token = tenantName
-            ? await this._tokenStore.getTenantToken(tenantName)
-            : await this._tokenStore.getMasterToken();
+        const webtasks = await listWebtasks(this, tenantName, offset, limit);
 
-        const path = tenantName ? `api/webtask/${tenantName}` : 'api/webtask';
-        const query = `?offset=${offset}&limit=${limit}`;
-        const webtasks = await this._client.request('GET', path + query, token);
-        const mapped = _.map(webtasks, webtask => {
-            const token = new Token(webtask.token);
+        return _.map(webtasks, webtask => {
             return {
                 tenantName: webtask.container,
                 webtaskName: webtask.name,
-                deployment: this,
-                token,
             };
         });
-
-        return mapped;
     }
 
     async deleteWebtask(tenantName, webtaskName) {
         Assert.ok(_.isString(tenantName), 'tenantName(string) required');
         Assert.ok(_.isString(webtaskName), 'webtaskName(string) required');
 
-        const tenantToken = await this._tokenStore.getTenantToken(tenantName);
-        await this._client.request(
-            'DELETE',
-            `api/webtask/${tenantName}/${webtaskName}`,
-            tenantToken
-        );
-        return;
+        const names = getNames(tenantName, webtaskName);
+        const token = await this._tokenStore.getToken(tenantName);
+
+        await deleteWebtask(this, names, token);
     }
 
     async provisionModules(modules, tenantName) {
@@ -265,12 +402,8 @@ class Deployment {
             );
         }
 
-        const token = tenantName
-            ? await this._tokenStore.getTenantToken(tenantName)
-            : await this._tokenStore.getMasterToken();
-
-        const path = 'api/env/node/modules';
-        return await this._client.request('POST', path, token, { modules });
+        const token = await this._tokenStore.getToken(tenantName);
+        return await provisionModules(this, modules, token);
     }
 }
 

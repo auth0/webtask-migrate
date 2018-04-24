@@ -30,7 +30,7 @@ const downloadOptions = {
 const webtask = await fromDeployment.downloadWebtask(tenantName, webtaskName, downloadOptions);
 
 // Run analysis on the webtask
-const analysis = await webtaskAnalyzer.analyze(webtask);
+const analysis = await webtaskAnalyzer.analyze(webtaskName, webtask);
 
 // Update the webtask with any missing dependencies
 webtask.addDependencies(analysis.dependencies);
@@ -40,7 +40,7 @@ await toDeployment.provisionModules(webtask.getDependencies(), tenantName);
 
 // Upload the webtask to the new deployment
 await toDeployment.uploadWebtask(tenantName, webtaskName, webtask);
- 
+
 // Write out an warnings detected during the analysis
 console.log(analysis.warnings)
 ```

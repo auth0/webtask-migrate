@@ -1,6 +1,6 @@
 {
-  "name": "rwt-migrate",
-  "version": "0.0.26",
+  "name": "webtask-migrate",
+  "version": "0.1.0",
   "description": "Migrate webtasks between deployments",
   "main": "src/index.js",
   "repository": {

@@ -57,7 +57,7 @@ function drainQueue(client) {
             }
 
             if (error) {
-                error.canRetry = response.statusCode >= 500;
+                error.canRetry = response && response.statusCode >= 500;
                 return next.reject(error);
             }
 

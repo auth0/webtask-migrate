@@ -6,15 +6,15 @@
 const { Token, TokenStore, Deployment, WebtaskAnalyzer } = require('webtask-migrate');
 
 // inputs
-const tenantTokenString = process.env.TENANT_TOKEN;
+const tenantTokenString = process.env.TOKEN;
 const fromDeploymentUrl = process.env.FROM_DEPLOYMENT_URL;
 const toDeploymentUrl = process.env.TO_DEPLOYMENT_URL;
-const tenantName = process.env.TENANT_NAME;
+const tenantName = process.env.TENANT;
 const webtaskName = process.env.WEBTASK_NAME;
 
 // Setup
 const tokenStore = new TokenStore();
-tokenStore.addToken(new Token(tenantTokenString));
+tokenStore.addToken(new Token(tenantTokenString, tenantName));
 
 const fromDeployment = new Deployment(tokenStore, fromDeploymentUrl);
 const toDeployment = new Deployment(tokenStore, toDeploymentUrl);

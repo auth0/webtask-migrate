@@ -58,6 +58,31 @@ class Webtask {
         return modules;
     }
 
+    removeDependencies(modules) {
+        Assert.ok(_.isArray(modules), 'modules(array) requires');
+
+        let dependencies;
+        try {
+            dependencies = JSON.parse(this._state.meta['wt-node-dependencies']);
+        } catch (error) {
+            // do nothing
+        }
+
+        dependencies = dependencies || {};
+
+        for (const aModule of modules) {
+            Assert.ok(_.isString(aModule.name), 'module.name(string) required');
+            Assert.ok(
+                _.isString(aModule.version),
+                'module.version(string) required'
+            );
+
+            delete dependencies[aModule.name];
+        }
+
+        this._state.meta['wt-node-dependencies'] = JSON.stringify(dependencies);
+    }
+
     addDependencies(modules) {
         Assert.ok(_.isArray(modules), 'modules(array) requires');
 

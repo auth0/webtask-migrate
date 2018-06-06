@@ -101,10 +101,16 @@ async function uploadStorage(deployment, names, token, webtask, overwrite) {
 async function uploadCron(deployment, names, token, webtask) {
     const cron = webtask.getCron();
     if (cron && _.keys(cron).length) {
+        const body = {
+            tz: cron.tz,
+            meta: cron.meta,
+            schedule: cron.schedule,
+            state: cron.state
+        };
         const { safeTenant, safeWebtask } = names;
         const path = `api/cron/${safeTenant}/${safeWebtask}`;
         try {
-            await deployment._client.request('PUT', path, token, cron);
+            await deployment._client.request('PUT', path, token, body);
         } catch (error) {
             const message = [
                 'Failed to create the CRON job',
@@ -121,70 +127,36 @@ async function startDownloads(deployment, names, options) {
 
     const token = await tokenStore.getToken(names.tenantName);
 
-    const promises = {};
-
     const includeSecrets = options.includeSecrets == true;
     const path = `${names.safeTenant}/${names.safeWebtask}`;
     const webtaskPath = `api/webtask/${path}`;
     const query = `?decrypt=${includeSecrets}&fetch_code=true`;
 
-    promises.webtask = client.request('GET', `${webtaskPath}${query}`, token);
+    const promises = [];
+    promises.push(client.request('GET', `${webtaskPath}${query}`, token));
     if (options.includeStorage) {
-        promises.storage = client.request('GET', `${webtaskPath}/data`, token);
+        promises.push(
+            (promises.storage = client.request(
+                'GET',
+                `${webtaskPath}/data`,
+                token
+            ))
+        );
     }
     if (options.includeCron) {
-        promises.cron = client.request('GET', `api/cron/${path}`, token);
+        promises.push(
+            (promises.cron = client.request('GET', `api/cron/${path}`, token))
+        );
     }
 
-    return promises;
-}
-
-async function downloadWebtask(webtaskPromise) {
     try {
-        return await webtaskPromise;
+        return await Promise.all(promises);
     } catch (error) {
         const message = [
             'Failed to download the webtask',
             `due to the following error: ${error.message}`,
         ].join(' ');
         throw new Error(message);
-    }
-}
-
-async function downloadStorage(storagePromise, options) {
-    let storage;
-    try {
-        storage = await storagePromise;
-    } catch (error) {
-        const message = [
-            'Failed to download the webtask storage data',
-            `due to the following error: ${error.message}`,
-        ].join(' ');
-        throw new Error(message);
-    }
-    if (storage) {
-        options.storage = storage;
-    }
-}
-
-async function downloadCron(cronPromise, options) {
-    let cron;
-    try {
-        cron = await cronPromise;
-    } catch (error) {
-        const message = [
-            'Failed to download the webtask storage data',
-            `due to the following error: ${error.message}`,
-        ].join(' ');
-        throw new Error(message);
-    }
-    if (cron) {
-        options.cron = {
-            state: cron.state,
-            schedule: cron.schedule,
-            tz: cron.tz,
-            meta: cron.meta,
-        };
     }
 }
 
@@ -303,9 +275,15 @@ class Deployment {
 
         const ignoreClaims = options.ignoreClaims || false;
         const overwriteStorage = options.overwriteStorage || false;
+        const cronOnly = options.cronOnly;
 
         const names = getNames(tenantName, webtaskName);
         const token = await this._tokenStore.getToken(tenantName);
+
+        if (cronOnly) {
+            await uploadCron(this, names, token, webtask);
+            return;
+        }
 
         await uploadWebtask(this, names, token, webtask, ignoreClaims);
         await uploadStorage(this, names, token, webtask, overwriteStorage);
@@ -320,9 +298,8 @@ class Deployment {
         Assert.ok(_.isObject(options), 'options(object) invalid type');
 
         const names = getNames(tenantName, webtaskName);
-        const promises = await startDownloads(this, names, options);
-
-        const webtask = await downloadWebtask(promises.webtask);
+        let results = await startDownloads(this, names, options);
+        const webtask = results.shift();
         if (!webtask) {
             return null;
         }
@@ -336,12 +313,13 @@ class Deployment {
             cron: {},
         };
 
-        if (promises.storage) {
-            await downloadStorage(promises.storage, webtaskOptions);
+        if (options.includeStorage) {
+            webtaskOptions.storage = results.shift() || {};
+
         }
 
-        if (promises.cron) {
-            await downloadCron(promises.cron, webtaskOptions);
+        if (options.includeCron) {
+            webtaskOptions.cron = results.shift() || {};
         }
 
         return new Webtask(code, webtaskOptions);

@@ -259,7 +259,7 @@ async function upload(migrator, tenantName, webtaskName, webtask) {
 async function report(migrator, tenantName, webtaskName, results) {
     const deployment = migrator._toDeployment;
 
-    reportWebtask = await deployment.downloadWebtask(
+    let reportWebtask = await deployment.downloadWebtask(
         tenantName,
         reportWebtaskName,
         { includeStorage: true }
@@ -275,7 +275,7 @@ async function report(migrator, tenantName, webtaskName, results) {
     const existing = _.remove(allResults, entry => entry.name === webtaskName);
 
     if (existing.length) {
-        if (results.message === alreadyExistsResponse.message) {
+        if (results.message === responseMessages.alreadyExists) {
             return;
         }
     }
@@ -338,7 +338,7 @@ async function generateReport(migrator, tenantName, webtaskName, results) {
     if (migrator._generateReport) {
         for (let attempt = 0; attempt < maxReportRetry; attempt++) {
             try {
-                report(migrator, tenantName, webtaskName, results);
+                await report(migrator, tenantName, webtaskName, results);
                 break;
             } catch (error) {
                 // do nothing
